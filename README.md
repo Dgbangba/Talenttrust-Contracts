@@ -32,10 +32,17 @@ Machine-readable details are in [deployments/testnet.json](deployments/testnet.j
 | `resolve_dispute(id, freelancer_bps)` | admin | Split the held balance (basis points to freelancer) |
 | `cancel_contract(id)` | client | Refund unreleased funds and close |
 | `issue_reputation(id, rating)` | client | Rate a completed job (1-5), once |
+| `rate_client(id, rating)` | freelancer | Rate a completed or resolved job (1-5), once |
 | `set_paused(bool)` / `is_paused()` | admin / - | Circuit breaker for all mutations |
-| `get_contract(id)`, `contract_count()`, `get_reputation(addr)`, `get_admin()`, `version()` | - | Reads |
+| `get_contract(id)`, `contract_count()`, `get_reputation(addr)`, `get_client_reputation(addr)`, `get_admin()`, `version()` | - | Reads |
 
 Status flow: `Created -> Funded -> Completed`, with `Disputed -> Resolved` and `Cancelled` side exits.
+
+### Reputation & Ratings
+
+- **Freelancer reputation**: Clients rate freelancers via `issue_reputation(id, rating)` after `Completed`. Emits event topics `("rep", id)` with data `(freelancer, rating)`.
+- **Client reputation**: Freelancers rate clients via `rate_client(id, rating)` after `Completed` or `Resolved`. Emits event topics `("rep_cli", id)` with data `(client, rating)`.
+- **Errors**: Ratings must be in the `1..=5` range (`InvalidRating`), can only be submitted once per escrow (`ReputationAlreadyIssued`), require appropriate status (`InvalidStatus`), and respect the circuit breaker (`Paused`).
 
 ## Build and test
 
