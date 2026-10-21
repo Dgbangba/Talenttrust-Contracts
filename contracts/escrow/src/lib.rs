@@ -583,6 +583,9 @@ impl Escrow {
         env.storage()
             .persistent()
             .get(&DataKey::ClientReputation(client))
+            .unwrap_or_default()
+    }
+
     pub fn get_outcomes(env: Env, addr: Address) -> Outcomes {
         env.storage()
             .persistent()

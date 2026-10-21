@@ -200,11 +200,6 @@ fn test_rate_client_completed_success_and_event() {
 fn test_rate_client_resolved_success() {
     let s = setup();
     let id = s.escrow.create_contract(
-fn dispute_outcomes_freelancer_client_and_exact_threshold() {
-    let s = setup();
-
-    // 1. Freelancer-favoured resolution (> 5_000 bps): 7_500 bps
-    let id1 = s.escrow.create_contract(
         &s.client,
         &s.freelancer,
         &s.token.address,
@@ -313,6 +308,173 @@ fn test_rate_client_duplicate_rejection() {
 #[test]
 fn test_rate_client_validation() {
     let s = setup();
+    let id = s.escrow.create_contract(
+        &s.client,
+        &s.freelancer,
+        &s.token.address,
+        &vec![&s.env, 100i128],
+    );
+    s.escrow.deposit_funds(&id, &100);
+    s.escrow.release_milestone(&id, &0);
+
+    // Rating 0 is rejected
+    assert_eq!(
+        s.escrow.try_rate_client(&id, &0),
+        Err(Ok(EscrowError::InvalidRating))
+    );
+
+    // Rating 6 is rejected
+    assert_eq!(
+        s.escrow.try_rate_client(&id, &6),
+        Err(Ok(EscrowError::InvalidRating))
+    );
+
+    // Valid rating 1..=5 accepted
+    assert_eq!(s.escrow.try_rate_client(&id, &3), Ok(Ok(())));
+    let rep = s.escrow.get_client_reputation(&s.client);
+    assert_eq!(rep.completed_contracts, 1);
+    assert_eq!(rep.total_rating, 3);
+}
+
+#[test]
+fn test_rate_client_status_rejections() {
+    let s = setup();
+
+    // 1. Escrow in Funded status rejected
+    let id_funded = s.escrow.create_contract(
+        &s.client,
+        &s.freelancer,
+        &s.token.address,
+        &vec![&s.env, 100i128],
+    );
+    s.escrow.deposit_funds(&id_funded, &100);
+    assert_eq!(
+        s.escrow.get_contract(&id_funded).status,
+        ContractStatus::Funded
+    );
+    assert_eq!(
+        s.escrow.try_rate_client(&id_funded, &5),
+        Err(Ok(EscrowError::InvalidStatus))
+    );
+
+    // 2. Escrow in Cancelled status rejected
+    let id_cancelled = s.escrow.create_contract(
+        &s.client,
+        &s.freelancer,
+        &s.token.address,
+        &vec![&s.env, 50i128],
+    );
+    s.escrow.deposit_funds(&id_cancelled, &50);
+    s.escrow.cancel_contract(&id_cancelled);
+    assert_eq!(
+        s.escrow.get_contract(&id_cancelled).status,
+        ContractStatus::Cancelled
+    );
+    assert_eq!(
+        s.escrow.try_rate_client(&id_cancelled, &5),
+        Err(Ok(EscrowError::InvalidStatus))
+    );
+}
+
+#[test]
+fn test_reputation_independence() {
+    let s = setup();
+
+    // Contract 1: Client issues reputation first, then freelancer rates client
+    let id1 = s.escrow.create_contract(
+        &s.client,
+        &s.freelancer,
+        &s.token.address,
+        &vec![&s.env, 100i128],
+    );
+    s.escrow.deposit_funds(&id1, &100);
+    s.escrow.release_milestone(&id1, &0);
+
+    // Client rates freelancer
+    s.escrow.issue_reputation(&id1, &5);
+    let fl_rep1 = s.escrow.get_reputation(&s.freelancer);
+    assert_eq!(fl_rep1.completed_contracts, 1);
+    assert_eq!(fl_rep1.total_rating, 5);
+
+    // Freelancer rates client afterwards; client-rating is not blocked
+    s.escrow.rate_client(&id1, &4);
+    let cl_rep1 = s.escrow.get_client_reputation(&s.client);
+    assert_eq!(cl_rep1.completed_contracts, 1);
+    assert_eq!(cl_rep1.total_rating, 4);
+
+    // Contract 2: Freelancer rates client first, then client rates freelancer
+    let id2 = s.escrow.create_contract(
+        &s.client,
+        &s.freelancer,
+        &s.token.address,
+        &vec![&s.env, 100i128],
+    );
+    s.escrow.deposit_funds(&id2, &100);
+    s.escrow.release_milestone(&id2, &0);
+
+    // Freelancer rates client first
+    s.escrow.rate_client(&id2, &5);
+    let cl_rep2 = s.escrow.get_client_reputation(&s.client);
+    assert_eq!(cl_rep2.completed_contracts, 2);
+    assert_eq!(cl_rep2.total_rating, 9);
+
+    // Client rates freelancer afterwards; freelancer-rating is not blocked
+    s.escrow.issue_reputation(&id2, &4);
+    let fl_rep2 = s.escrow.get_reputation(&s.freelancer);
+    assert_eq!(fl_rep2.completed_contracts, 2);
+    assert_eq!(fl_rep2.total_rating, 9);
+
+    // Duplicate client rating on id2 rejected
+    assert_eq!(
+        s.escrow.try_rate_client(&id2, &5),
+        Err(Ok(EscrowError::ReputationAlreadyIssued))
+    );
+    // Duplicate freelancer rating on id2 rejected
+    assert_eq!(
+        s.escrow.try_issue_reputation(&id2, &4),
+        Err(Ok(EscrowError::ReputationAlreadyIssued))
+    );
+}
+
+#[test]
+fn test_rate_client_pause_gate() {
+    let s = setup();
+    let id = s.escrow.create_contract(
+        &s.client,
+        &s.freelancer,
+        &s.token.address,
+        &vec![&s.env, 100i128],
+    );
+    s.escrow.deposit_funds(&id, &100);
+    s.escrow.release_milestone(&id, &0);
+    assert_eq!(s.escrow.get_contract(&id).status, ContractStatus::Completed);
+
+    // Pause contract
+    s.escrow.set_paused(&true);
+    assert_eq!(
+        s.escrow.try_rate_client(&id, &5),
+        Err(Ok(EscrowError::Paused))
+    );
+
+    // Unpause contract and verify rating succeeds
+    s.escrow.set_paused(&false);
+    assert_eq!(s.escrow.try_rate_client(&id, &5), Ok(Ok(())));
+    let rep = s.escrow.get_client_reputation(&s.client);
+    assert_eq!(rep.completed_contracts, 1);
+    assert_eq!(rep.total_rating, 5);
+}
+
+#[test]
+fn dispute_outcomes_freelancer_client_and_exact_threshold() {
+    let s = setup();
+
+    // 1. Freelancer-favoured resolution (> 5_000 bps): 7_500 bps
+    let id1 = s.escrow.create_contract(
+        &s.client,
+        &s.freelancer,
+        &s.token.address,
+        &vec![&s.env, 200i128],
+    );
     s.escrow.deposit_funds(&id1, &200);
     s.escrow.open_dispute(&id1, &s.client);
     s.escrow.resolve_dispute(&id1, &7_500);
@@ -379,50 +541,6 @@ fn rate_resolved_escrow_succeeds_once_and_cancelled_rejected() {
         &vec![&s.env, 100i128],
     );
     s.escrow.deposit_funds(&id, &100);
-    s.escrow.release_milestone(&id, &0);
-
-    // Rating 0 is rejected
-    assert_eq!(
-        s.escrow.try_rate_client(&id, &0),
-        Err(Ok(EscrowError::InvalidRating))
-    );
-
-    // Rating 6 is rejected
-    assert_eq!(
-        s.escrow.try_rate_client(&id, &6),
-        Err(Ok(EscrowError::InvalidRating))
-    );
-
-    // Valid rating 1..=5 accepted
-    assert_eq!(s.escrow.try_rate_client(&id, &3), Ok(Ok(())));
-    let rep = s.escrow.get_client_reputation(&s.client);
-    assert_eq!(rep.completed_contracts, 1);
-    assert_eq!(rep.total_rating, 3);
-}
-
-#[test]
-fn test_rate_client_status_rejections() {
-    let s = setup();
-
-    // 1. Escrow in Funded status rejected
-    let id_funded = s.escrow.create_contract(
-        &s.client,
-        &s.freelancer,
-        &s.token.address,
-        &vec![&s.env, 100i128],
-    );
-    s.escrow.deposit_funds(&id_funded, &100);
-    assert_eq!(
-        s.escrow.get_contract(&id_funded).status,
-        ContractStatus::Funded
-    );
-    assert_eq!(
-        s.escrow.try_rate_client(&id_funded, &5),
-        Err(Ok(EscrowError::InvalidStatus))
-    );
-
-    // 2. Escrow in Cancelled status rejected
-    let id_cancelled = s.escrow.create_contract(
     s.escrow.open_dispute(&id, &s.client);
     s.escrow.resolve_dispute(&id, &5_000);
 
@@ -447,14 +565,6 @@ fn test_rate_client_status_rejections() {
         &s.token.address,
         &vec![&s.env, 50i128],
     );
-    s.escrow.deposit_funds(&id_cancelled, &50);
-    s.escrow.cancel_contract(&id_cancelled);
-    assert_eq!(
-        s.escrow.get_contract(&id_cancelled).status,
-        ContractStatus::Cancelled
-    );
-    assert_eq!(
-        s.escrow.try_rate_client(&id_cancelled, &5),
     s.escrow.deposit_funds(&id_cancel, &50);
     s.escrow.cancel_contract(&id_cancel);
     assert_eq!(
@@ -468,10 +578,6 @@ fn test_rate_client_status_rejections() {
 }
 
 #[test]
-fn test_reputation_independence() {
-    let s = setup();
-
-    // Contract 1: Client issues reputation first, then freelancer rates client
 fn cancel_unfunded_escrow_does_not_count_cancellation() {
     let s = setup();
 
@@ -481,22 +587,7 @@ fn cancel_unfunded_escrow_does_not_count_cancellation() {
         &s.freelancer,
         &s.token.address,
         &vec![&s.env, 100i128],
-    );    s.escrow.deposit_funds(&id1, &100);
-    s.escrow.release_milestone(&id1, &0);
-
-    // Client rates freelancer
-    s.escrow.issue_reputation(&id1, &5);
-    let fl_rep1 = s.escrow.get_reputation(&s.freelancer);
-    assert_eq!(fl_rep1.completed_contracts, 1);
-    assert_eq!(fl_rep1.total_rating, 5);
-
-    // Freelancer rates client afterwards; client-rating is not blocked
-    s.escrow.rate_client(&id1, &4);
-    let cl_rep1 = s.escrow.get_client_reputation(&s.client);
-    assert_eq!(cl_rep1.completed_contracts, 1);
-    assert_eq!(cl_rep1.total_rating, 4);
-
-    // Contract 2: Freelancer rates client first, then client rates freelancer
+    );
     s.escrow.cancel_contract(&id1);
     assert_eq!(s.escrow.get_outcomes(&s.client).cancellations, 0);
 
@@ -508,60 +599,6 @@ fn cancel_unfunded_escrow_does_not_count_cancellation() {
         &vec![&s.env, 100i128],
     );
     s.escrow.deposit_funds(&id2, &100);
-    s.escrow.release_milestone(&id2, &0);
-
-    // Freelancer rates client first
-    s.escrow.rate_client(&id2, &5);
-    let cl_rep2 = s.escrow.get_client_reputation(&s.client);
-    assert_eq!(cl_rep2.completed_contracts, 2);
-    assert_eq!(cl_rep2.total_rating, 9);
-
-    // Client rates freelancer afterwards; freelancer-rating is not blocked
-    s.escrow.issue_reputation(&id2, &4);
-    let fl_rep2 = s.escrow.get_reputation(&s.freelancer);
-    assert_eq!(fl_rep2.completed_contracts, 2);
-    assert_eq!(fl_rep2.total_rating, 9);
-
-    // Duplicate client rating on id2 rejected
-    assert_eq!(
-        s.escrow.try_rate_client(&id2, &5),
-        Err(Ok(EscrowError::ReputationAlreadyIssued))
-    );
-    // Duplicate freelancer rating on id2 rejected
-    assert_eq!(
-        s.escrow.try_issue_reputation(&id2, &4),
-        Err(Ok(EscrowError::ReputationAlreadyIssued))
-    );
-}
-
-#[test]
-fn test_rate_client_pause_gate() {
-    let s = setup();
-    let id = s.escrow.create_contract(
-        &s.client,
-        &s.freelancer,
-        &s.token.address,
-        &vec![&s.env, 100i128],
-    );
-    s.escrow.deposit_funds(&id, &100);
-    s.escrow.release_milestone(&id, &0);
-    assert_eq!(s.escrow.get_contract(&id).status, ContractStatus::Completed);
-
-    // Pause contract
-    s.escrow.set_paused(&true);
-    assert_eq!(
-        s.escrow.try_rate_client(&id, &5),
-        Err(Ok(EscrowError::Paused))
-    );
-
-    // Unpause contract and verify rating succeeds
-    s.escrow.set_paused(&false);
-    assert_eq!(s.escrow.try_rate_client(&id, &5), Ok(Ok(())));
-    let rep = s.escrow.get_client_reputation(&s.client);
-    assert_eq!(rep.completed_contracts, 1);
-    assert_eq!(rep.total_rating, 5);
-}
     s.escrow.cancel_contract(&id2);
     assert_eq!(s.escrow.get_outcomes(&s.client).cancellations, 1);
 }
-
