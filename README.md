@@ -28,27 +28,28 @@ Machine-readable details are in [deployments/testnet.json](deployments/testnet.j
 | `create_contract(client, freelancer, token, milestone_amounts) -> u64` | client | Create an escrow with up to 20 milestones |
 | `deposit_funds(id, amount)` | client | Transfer tokens into escrow (cannot exceed total) |
 | `release_milestone(id, index)` | client | Pay the freelancer for a milestone |
-| `open_dispute(id, caller)` | client or freelancer | Freeze the escrow pending resolution |
-| `resolve_dispute(id, freelancer_bps)` | admin | Split the held balance (basis points to freelancer) |
-| `cancel_contract(id)` | client | Refund unreleased funds and close |
-| `issue_reputation(id, rating)` | client | Rate a completed job (1-5), once |
-| `rate_client(id, rating)` | freelancer | Rate a completed or resolved job (1-5), once |
-| `set_paused(bool)` / `is_paused()` | admin / - | Circuit breaker for all mutations |
-| `get_contract(id)`, `contract_count()`, `get_reputation(addr)`, `get_client_reputation(addr)`, `get_admin()`, `version()` | - | Reads |
 | `open_dispute(id, caller)` | client or freelancer | Freeze the escrow pending resolution (increments `disputes_opened`) |
 | `resolve_dispute(id, freelancer_bps)` | admin | Split the held balance (records dispute win/loss outcomes based on 5,000 bps threshold) |
 | `cancel_contract(id)` | client | Refund unreleased funds and close (increments `cancellations` if funds held) |
 | `issue_reputation(id, rating)` | client | Rate a completed or resolved job (1-5), once |
+| `rate_client(id, rating)` | freelancer | Rate a completed or resolved job (1-5), once |
+| `void_rating(id, reason)` | admin | Void a fraudulent rating, reverse reputation and emit audit trail |
 | `set_paused(bool)` / `is_paused()` | admin / - | Circuit breaker for all mutations |
-| `get_contract(id)`, `contract_count()`, `get_reputation(addr)`, `get_outcomes(addr)`, `get_admin()`, `version()` | - | Reads |
+| `get_contract(id)`, `get_rating(id)`, `contract_count()`, `get_reputation(addr)`, `get_client_reputation(addr)`, `get_outcomes(addr)`, `get_admin()`, `version()` | - | Reads |
 
 Status flow: `Created -> Funded -> Completed`, with `Disputed -> Resolved` and `Cancelled` side exits. Resolved jobs allow reputation rating; dispute outcomes and cancellation metrics are tracked in persistent `Outcomes`.
 
 ### Reputation & Ratings
 
-- **Freelancer reputation**: Clients rate freelancers via `issue_reputation(id, rating)` after `Completed`. Emits event topics `("rep", id)` with data `(freelancer, rating)`.
+- **Freelancer reputation**: Clients rate freelancers via `issue_reputation(id, rating)` after `Completed` or `Resolved`. Emits event topics `("rep", id)` with data `(freelancer, rating)`.
 - **Client reputation**: Freelancers rate clients via `rate_client(id, rating)` after `Completed` or `Resolved`. Emits event topics `("rep_cli", id)` with data `(client, rating)`.
 - **Errors**: Ratings must be in the `1..=5` range (`InvalidRating`), can only be submitted once per escrow (`ReputationAlreadyIssued`), require appropriate status (`InvalidStatus`), and respect the circuit breaker (`Paused`).
+
+### Reputation Governance & Audit Trail
+- Ratings are recorded per escrow as `RatingRecord { freelancer, rating, issued_at, voided }`.
+- Protocol admin can void fraudulent or collusive ratings via `void_rating(id, reason)`, which subtracts the rating and 1 contract from the freelancer's reputation and emits `("rep_void", id) -> (freelancer, rating, reason)`.
+- Voided escrows remain flagged so they cannot be re-rated (`ReputationAlreadyIssued`). Attempting to void twice returns `EscrowError::RatingAlreadyVoided (19)`.
+- Ratings issued before this audit trail upgrade have no `RatingRecord` and return `EscrowError::RatingNotFound (18)`.
 
 ## Build and test
 
