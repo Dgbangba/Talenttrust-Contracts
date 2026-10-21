@@ -35,8 +35,14 @@ Machine-readable details are in [deployments/testnet.json](deployments/testnet.j
 | `rate_client(id, rating)` | freelancer | Rate a completed or resolved job (1-5), once |
 | `set_paused(bool)` / `is_paused()` | admin / - | Circuit breaker for all mutations |
 | `get_contract(id)`, `contract_count()`, `get_reputation(addr)`, `get_client_reputation(addr)`, `get_admin()`, `version()` | - | Reads |
+| `open_dispute(id, caller)` | client or freelancer | Freeze the escrow pending resolution (increments `disputes_opened`) |
+| `resolve_dispute(id, freelancer_bps)` | admin | Split the held balance (records dispute win/loss outcomes based on 5,000 bps threshold) |
+| `cancel_contract(id)` | client | Refund unreleased funds and close (increments `cancellations` if funds held) |
+| `issue_reputation(id, rating)` | client | Rate a completed or resolved job (1-5), once |
+| `set_paused(bool)` / `is_paused()` | admin / - | Circuit breaker for all mutations |
+| `get_contract(id)`, `contract_count()`, `get_reputation(addr)`, `get_outcomes(addr)`, `get_admin()`, `version()` | - | Reads |
 
-Status flow: `Created -> Funded -> Completed`, with `Disputed -> Resolved` and `Cancelled` side exits.
+Status flow: `Created -> Funded -> Completed`, with `Disputed -> Resolved` and `Cancelled` side exits. Resolved jobs allow reputation rating; dispute outcomes and cancellation metrics are tracked in persistent `Outcomes`.
 
 ### Reputation & Ratings
 
